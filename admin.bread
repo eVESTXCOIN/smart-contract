@@ -1,1 +1,125 @@
+{-# STDLIB_VERSION 1 #-}
+{-# CONTENT_TYPE DAPP #-}
+{-# SCRIPT_TYPE ACCOUNT #-}
 
+### keys ###
+
+#config
+let ao = "address_"
+let ac = "activate"
+let poolAc = "activate_pools"
+let swapAc = "activate_swap"
+let nfetAc = "activate_nft"
+let liquidityAc = "activate_liquidity"
+let bcD = "block_distribuition"
+let bridgesAc = "activate_bridges"
+let aAD = "admin"
+let oC = "oracle_"
+let oT = "total_oracle"
+
+#assets
+let eVESTX = "eVESTX"
+let aEVESTX = "accept_eVESTX"
+let EVESTX = unit
+
+#admin verification
+func adminVerification(i: Invocation) = match (getString(this, "admin")) {
+    case t: String => Address(fromBase58String(t)) == i.caller
+    case _ => this == i.caller 
+} 
+
+#value data account
+let rateFee = "percentage_rate_fee_swap"
+let rateFeeLimit = "rate_fee_limit"
+let rateFeeHeight = "rate_fee_height"
+
+#error
+let errorAdmin = "Only the Admin itself can invoke this function"
+
+#### Admin settings and options ####
+
+#power on/off dApp
+@Callable(i)
+func activate(v: Boolean) = {
+    if(adminVerification(i))
+      then [BooleanEntry(ac, v)]
+    else throw(errorAdmin)
+}
+#activate and desactivate pools/swap/liquidity
+@Callable(i)
+func maintenance(pools: Boolean, swap: Boolean, stake: Boolean, bridges: Boolean, nft:Boolean) = {
+  if(adminVerification(i))
+   then [BooleanEntry(poolAc, pools), BooleanEntry(swapAc, swap), BooleanEntry(liquidityAc, stake), BooleanEntry(bridgesAc, bridges),BooleanEntry(nfetAc, nft)]
+  else throw(errorAdmin)
+}
+
+#edit percentual rate for fees swap
+@Callable(i)
+func RateFee(rateSwap: Int, limitHeight: Int) = {
+  if(adminVerification(i))
+   then [IntegerEntry(rateFee, rateSwap),IntegerEntry(rateFeeHeight, limitHeight),IntegerEntry(rateFeeLimit, 100000000000000000)]
+  else throw(errorAdmin)
+}
+
+#garatia do garan
+@Callable(i)
+func recommendation(activate: Boolean) = {
+  if(adminVerification(i))
+    then [BooleanEntry("RECOMMENDATION", activate)]
+  else throw(errorAdmin)
+}
+
+@Callable(i)
+func accepteVESTX(activate: Boolean) = {
+  if(adminVerification(i))
+   then [BooleanEntry(aEVESTX, activate)]
+  else throw(errorAdmin)
+}
+#add admin for smart contract
+@Callable(i)
+func addAdmin(address: String) = {
+  if(adminVerification(i))
+   then{
+     [
+      StringEntry(aAD, address)
+     ]
+   }
+  else throw(errorAdmin)
+}
+#block distribution fee in the dex
+@Callable(i)
+func BlockDistribution(amount: Int) = {
+  if(adminVerification(i))
+   then{
+     [
+      IntegerEntry(bcD, amount)
+     ]
+   } 
+  else throw(errorAdmin)
+}
+#set oracle
+@Callable(i)
+func SetOracle(address: String, number: Int) = {
+    if(adminVerification(i))
+     then {
+       [
+         StringEntry(oC+toString(number), address),
+         IntegerEntry(oT, number)
+       ]
+     }
+    else throw(errorAdmin)
+}
+
+#set address
+@Callable(i)
+func Set(address: String, T: Int) = {
+  let ki = if(T ==1) then ao+"IDO" else if(T==2) then ao+"BRIDGES" else if(T==3) then ao+"FARMS" else if(T==4) then ao+"POOLS" else ao+"NFT"
+  if(adminVerification(i))
+   then {
+     [
+      StringEntry(ki, address)
+     ]
+   }
+  else throw(errorAdmin)
+}
+#IDO - 1, Bridges - 2, Farms - 3, Pools - 4, NFT - 5
