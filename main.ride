@@ -1,0 +1,619 @@
+{-# STDLIB_VERSION 6 #-}
+{-# CONTENT_TYPE DAPP #-}
+{-# SCRIPT_TYPE ACCOUNT #-}
+
+let adminAddress = "3N8UaqrCTjypGPWXSvFJVSLv23bfuiPoJAh"
+let Admin = Address(fromBase58String(adminAddress))
+
+#config Key
+let eVESTX = "eVESTX"
+let aEVESTX = "accept_eVESTX"
+let EVESTX = unit
+
+#value data account
+let nfetAc = "activate_nft"
+let main = "main_asset"
+let l = "lp_asset_"
+let aa1 = "pool__"
+let sa = "STAKING_AMOUNT_"
+let la = "LEASE_AMOUNT_"
+let ix = "ID_"
+let rateFee = "percentage_rate_fee_swap"
+let rateFeeLimit = "rate_fee_limit"
+let rateFeeHeight = "rate_fee_height"
+let deposit_height = "Deposit_Height_Of_"
+
+#config
+let ac = "activate"
+let poolAc = "activate_pools"
+let swapAc = "activate_swap"
+let liquidityAc = "activate_liquidity"
+let bcD = "block_distribuition"
+# let typeBcd = "type_block_distribution"
+let D8 = pow(10,0,8,0,0,HALFUP)
+let total_locked = "Total_Tokens_Locked_"
+
+#error message
+let iniError = "Smart contract admin has not yet been initialized."
+
+#obtem os decimais de um asset -Ex: asset1 - 8 decimals, asset2 - 2 decimals
+func D(i:ByteVector) = assetInfo(i).value().decimals
+
+#obtem a diferença entre os decimais e gera essa diferença para a multiplicação
+func dM(i:Int, o:Int) = pow(10,0,(i-o),0,0,HALFUP)
+
+func D10(i:ByteVector) = pow(10,0,assetInfo(i).value().decimals,0,0,HALFUP)
+
+#validate asset1 and asset2
+func validateAsset(assetS: ByteVector|Unit, stringAsset: String,acEvestx: Boolean) = if(assetS == EVESTX && stringAsset == eVESTX) then if(acEvestx) then true else throw("The smart contract does not currently support eVESTX.") else if(assetS == fromBase58String(stringAsset)) then true else false
+
+func getAsset(a:ByteVector|Unit) = match a {
+  case a:ByteVector => toBase58String(a)
+  case _ => throw("Requires NFT as payment for sale.")
+}
+
+#key for pools
+func kp(asset1: String, asset2: String) = (aa1 + asset1 + "_" + asset2)
+
+#returns if pool is valid
+func validPoolK(key:String) = match getInteger(this, key){
+  case i: Int => i
+  case _ => false
+}
+#returns value that the account has in the pool
+func kpAddress(address:String, key:String) = match (getInteger(this,key + "_" + address)){
+  case t: Int => t
+  case _ => 0
+}
+
+#returns value that the account has in the pool for asset block
+func poolAA(address:String, key:String, asset: String) = match getInteger(this, address + "_" + key + "_" + asset){
+  case a: Int => a
+  case _ => 0
+}
+
+#return total asset for pool in smart contract
+func assetP(key:String, asset: String) = match getInteger(this,key+"_"+asset){
+  case a: Int => a
+  case _ => 1
+} 
+
+func verifiCollectionExist(a: String) = match getStringValue(this, a) {
+  case o: String => true
+  case _ => false
+}
+
+#get asset details - name
+func getAssetName(assetId: ByteVector) = match assetInfo(assetId){
+  case asset:Asset => asset.name
+  case _ => throw("Can't find asset")
+}
+
+
+#get asset issue - address
+func getAssetIssueAddress(a: ByteVector) = match assetInfo(a){
+  case asset:Asset => asset.issuer
+  case _ => throw("Can't find asset")
+}
+
+
+#return the total asset blocked in pool
+func totalAssetPool(key:String, assetLp: Boolean) = match getInteger(this, key){
+  case a: Int => a
+  case _ => if(assetLp) then D8 else 1
+}
+
+#return the asset id for pay in swap
+func valid(assetPay: ByteVector|Unit, pair1: String, pair2: String) = {
+  let pair1_58 = if(pair1 == eVESTX) then EVESTX else fromBase58String(pair1)
+  let pair2_58 = if(pair2 == eVESTX) then EVESTX else fromBase58String(pair2)
+  if(assetPay == pair1_58)
+   then pair2_58
+  else pair1_58
+}
+
+#return height for pool address key
+func pkey(Asset1: String,Asset2: String, address: String) = (deposit_height + kp(Asset1, Asset2) + "_" + address)
+
+#get total amount block in smart contract for asset
+func getAmountBlockAsset(assetId:String) = match getInteger(this, assetId){
+  case i: Int => i
+  case _ => 0
+}
+
+func MainAsset() = fromBase58String(getStringValue(Admin, main))
+
+func GetRateFeeSwap() = getIntegerValue(Admin, rateFee)
+
+#return the value for asset lp blocked in stake
+func lpBlocked(address: String, key: String) = match getInteger(this, "STAKE_LP_" +address + "_"+key){
+  case a: Int => a
+  case _ => 0
+}
+
+
+@Callable(i)
+func Swap(Asset1: String, Asset2: String) = {
+  let currentKey = toBase58String(i.caller.bytes) #get address for user
+  #main validations
+  let acEvestx =  getBooleanValue(Admin, aEVESTX)
+  let power = getBooleanValue(Admin,ac) #checks if the smart contract is activate
+  let swapActivate = getBooleanValue(Admin,swapAc) #check if the swap is activate
+  let poolKey = kp(Asset1, Asset2)
+  let key = validPoolK(poolKey) #get pool key (if existing) in smart contract for validation
+
+  #payments - to swap and fee
+  let asset1 = i.payments[0].assetId
+  let asset2 = i.payments[1].assetId
+
+  let lpAssetId = getIntegerValue(this,l+kp(Asset1, Asset2)) #get LP assetId configured for pool in smart contract by admin
+
+  #value for pool
+  let totalAsset1 = totalAssetPool(kp(Asset1, Asset2)+"_"+Asset1,false)
+  let totalAsset2 = totalAssetPool(kp(Asset1, Asset2)+"_"+Asset2,false)
+  let feeRatePercentual = getIntegerValue(Admin,rateFee)
+
+  let prAsset1 = (toBigInt(i.payments[0].amount)*fraction(toBigInt(D8), toBigInt(totalAsset2), toBigInt(totalAsset1)))
+  let priceAsset1 = toInt((prAsset1 - (prAsset1/toBigInt(feeRatePercentual))*toBigInt(100))/toBigInt(D8))
+  let prAsset2 = (toBigInt(i.payments[0].amount)*fraction(toBigInt(D8), toBigInt(totalAsset1), toBigInt(totalAsset2)))
+  let priceAsset2 = toInt((prAsset2 - (prAsset2/toBigInt(feeRatePercentual))*toBigInt(100))/toBigInt(D8))
+  let sendValue = if(asset1 == EVESTX && Asset1 == eVESTX) then priceAsset1 else {if(asset1 == fromBase58String(Asset1)) then priceAsset1 else priceAsset2}
+  let assetUpdatePay = if(asset1 == EVESTX) then eVESTX else {if(asset1 == fromBase58String(Asset1)) then Asset1 else Asset2}
+  let assetUpdateSwap = if(asset1 == EVESTX) then eVESTX else {if(asset1 == fromBase58String(Asset1)) then Asset2 else Asset1}
+  let assetSendSwap = valid(i.payments[0].assetId,Asset1,Asset2)
+  let n1s = assetP(kp(Asset1, Asset2), assetUpdateSwap)-sendValue
+  let nw = getAmountBlockAsset(assetUpdateSwap) - sendValue
+  let newUpda = if(0 > n1s) then 0 else n1s
+  let newUpdateSwap = if(0 > nw) then 0 else nw
+  let Dx = match i.payments[0].assetId{
+    case o: Unit => pow(10,0,8,0,0,HALFUP)
+    case x: ByteVector => pow(10,0,assetInfo(x).value().decimals,0,0,HALFUP)
+  } 
+
+  if(power)
+   then if(!(swapActivate))
+    then if(!(Asset1 == Asset2) && (validateAsset(asset1,Asset1,acEvestx) || validateAsset(asset1,Asset2,acEvestx))) #if asset1 and asset2 they're not the equal and asset payment and asset string is equal
+      then if(key != false) #if pool key is valid
+       then if(i.payments[1].assetId == MainAsset())
+         then if(i.payments[1].amount == GetRateFeeSwap())
+          then if(totalAsset1 > 2 || totalAsset2 > 2)
+           then{
+               let oldRateFeeSwapTotal = match getInteger(this,poolKey+"_rate_fee_swap"){
+                  case o:Int => o+GetRateFeeSwap()
+                  case _  => GetRateFeeSwap()
+               }
+            [
+               ScriptTransfer(Address(i.caller.bytes), if(0>sendValue) then Dx else sendValue, assetSendSwap),
+               IntegerEntry(assetUpdateSwap, newUpdateSwap),
+               IntegerEntry(kp(Asset1, Asset2)+"_"+assetUpdateSwap, newUpda),
+               IntegerEntry(kp(Asset1, Asset2)+"_"+assetUpdatePay,assetP(kp(Asset1, Asset2), assetUpdatePay)+(i.payments[0].amount)),
+               IntegerEntry(assetUpdatePay, getAmountBlockAsset(assetUpdatePay)+(i.payments[0].amount)),
+               IntegerEntry(toBase58String(MainAsset()), getAmountBlockAsset(toBase58String(MainAsset())) + i.payments[1].amount),
+               IntegerEntry(poolKey+"_rate_fee_swap", oldRateFeeSwapTotal)
+            ]
+          }
+         else throw("Pool has no liquidity.")
+        else throw("Swap denied! "+ toString(GetRateFeeSwap())+" Bicon is required for the swap fee.")
+       else throw("Invalid rate asset")
+      else throw("Invalid Swap Key.")
+    else throw("Asset1 cannot be equal to Asset2")
+   else throw("Swap is currently under maintenance.")
+  else throw("dApp is currently under maintenance.")
+}
+
+# @Callable(i)
+# func StableSwap() = {
+#   [
+#   ]
+# }
+
+@Callable(i)
+func AddLiquidity(Asset1:String, Asset2: String) = {
+  #main validations
+  let power = getBooleanValue(Admin, ac) #checks if the smart contract is activate - ok
+  let poolActivate = getBooleanValue(Admin, poolAc) #check if the pool in the smart contract is activate - ok
+  let acEvestx = getBooleanValue(Admin, aEVESTX) #check if the smart contract accept payment using eVESTX - ok
+  let key = validPoolK(kp(Asset1, Asset2)) #get pool key (if existing) in smart contract for validation - ok
+
+  #payment 
+  let asset1 = i.payments[0].assetId #get asset1 used for payment  - ok
+  let asset2 = i.payments[1].assetId #get asset2 used for payment - ok
+  let lpAssetId = getStringValue(this,l+kp(Asset1, Asset2)) #get LP assetId configured for pool in smart contract by admin - ok
+
+  let totalAsset1Pool = if(totalAssetPool(kp(Asset1, Asset2)+"_"+Asset1, false) < 2) then (i.payments[0].amount) else totalAssetPool(kp(Asset1, Asset2)+"_"+Asset1, false) 
+  let totalAsset2Pool = if(totalAssetPool(kp(Asset1, Asset2)+"_"+Asset1, false) < 2) then (i.payments[1].amount) else totalAssetPool(kp(Asset1, Asset2)+"_"+Asset2,false)
+  let totalLp = totalAssetPool(lpAssetId,true)
+  let priceLpAsset = (totalAsset1Pool+totalAsset2Pool)/totalLp
+  let quantityAsset2 = i.payments[0].amount*((totalAsset2Pool)/totalAsset1Pool)
+  let rateTop = i.payments[1].amount + (i.payments[1].amount*2/100) #rate top 2%
+  let rateBottom = i.payments[1].amount - (i.payments[1].amount*2/100) #rate top 2%
+  let Validate = if(i.payments[1].amount == quantityAsset2 || i.payments[1].amount<rateTop || i.payments[1].amount>rateBottom) then true else false
+
+  #validation and more
+  if((power)) #if the smart contract is activate - ok
+   then if(!(poolActivate)) #if pool is activate - ok
+    then if(!(asset1 == asset2) && (validateAsset(asset1, Asset1,acEvestx))&& (validateAsset(asset2,Asset2,acEvestx))) #if asset1 and asset2 they're not the equal and asset payment and asset string is equal - ok
+      then if(key != false) #if pool key is valid  - ok
+       then if(Validate)
+       then{
+        #get old or new values for account
+        let currentKey = toBase58String(i.caller.bytes) #get address for user - ok
+        let currentAmount = kpAddress(currentKey,kp(Asset1, Asset2)) #get amount LP locked by address - ok
+        let currentAmountAsset1 = poolAA(currentKey, kp(Asset1, Asset2), Asset1) #get amount locked by address for the asset1 if the lp token is not locked - ok
+        let currentAmountAsset2 = poolAA(currentKey, kp(Asset1, Asset2), Asset2) #get amount locked by address for the asset2 if the lp token is not locked - ok
+        let asset1pool = assetP(kp(Asset1, Asset2), Asset1) #get the total amount locked in smart contract for asset1 - ok
+        let asset2pool = assetP(kp(Asset1, Asset2), Asset2) #get the total amount locked in smart contract for asset2 - ok
+        let receiveLp = if(totalAsset1Pool == i.payments[0].amount) then 1*D8 else toInt(((toBigInt(i.payments[0].amount)*toBigInt(D8)+toBigInt(i.payments[1].amount)*toBigInt(D8))/((toBigInt(totalAsset1Pool)*toBigInt(D8)+toBigInt(totalAsset2Pool)*toBigInt(D8))/(toBigInt(totalLp))))) #get total asset lp which should be passed on based on the total pooled value of both assets - ok
+        #new values based on old values
+        let newcurrentAmountAsset1 = currentAmountAsset1 + i.payments[0].amount #updates the total of values ​​blocked by the address in the pool for asset1
+        let newcurrentAmountAsset2 = currentAmountAsset2 + i.payments[1].amount #updates the total of values ​​blocked by the address in the pool for asset2
+        let newcurrentAmount = currentAmount + receiveLp #updates the total of values ​​blocked by the address in the pool for lp asset
+        let newasset1pool = asset1pool + i.payments[0].amount #updates the total of values ​​blocked in the pool for asset1
+        let newasset2pool = asset2pool + i.payments[1].amount #updates the total of values ​​blocked in the pool for asset2
+        [
+         Reissue(fromBase58String(lpAssetId), receiveLp,true),
+         ScriptTransfer(Address(i.caller.bytes),receiveLp,fromBase58String(lpAssetId)), #transfer lp asset for address - ok
+         IntegerEntry(pkey(Asset1, Asset2, currentKey), height), #updates the lock height of values ​​in the pool - ok
+         IntegerEntry(currentKey + "_" + kp(Asset1, Asset2) + "_" + Asset1, newcurrentAmountAsset1), #update the amount loked by address for the asset1 in pool
+         IntegerEntry(currentKey + "_" + kp(Asset1, Asset2) + "_" + Asset2, newcurrentAmountAsset2), #update the amount loked by address for the asset2 in pool
+         IntegerEntry(kp(Asset1, Asset2) + "_" + currentKey,newcurrentAmount), #updates the total of values ​​blocked by the address in the pool for lp asset
+         IntegerEntry(kp(Asset1, Asset2)+"_"+Asset1, newasset1pool), #update the total amount of values blocked in pool for asset1
+         IntegerEntry(kp(Asset1, Asset2)+"_"+Asset2, newasset2pool), #update the total amount of values blocked in pool for asset2
+         IntegerEntry(Asset1, getAmountBlockAsset(Asset1) + i.payments[0].amount), #update the total amount of values blocked in smart contract for asset1
+         IntegerEntry(Asset2, getAmountBlockAsset(Asset2) + i.payments[1].amount), #update the total amount of values blocked in smart contract for asset2
+         IntegerEntry(lpAssetId, getAmountBlockAsset(lpAssetId) + receiveLp) #update the total amount of values blocked in pool for asset lp
+        ]
+       }
+       else throw("Payment of invalid 1/1 amounts to the Pool. Try Asset2: {value:" + toString(i.payments[0].amount*((totalAsset2Pool)/totalAsset1Pool))  + "} Received: " + toString(i.payments[1].amount)+ " Validate: "+ toString(Validate))
+      else throw("Invalid Pool Key.")
+    else throw("Asset1 cannot be equal to Asset2")
+   else throw("liquidity is currently under maintenance.")
+  else throw("dApp is currently under maintenance.")
+}
+
+@Callable(i)
+func ActivatePool(asset1: String, asset2: String, Name: String, customName: Boolean) = {
+  let nameAsset1 = if(asset1 == eVESTX) then eVESTX else getAssetName(fromBase58String(asset1))
+  let nameAsset2 = if(asset2 == eVESTX) then eVESTX else getAssetName(fromBase58String(asset2))
+  let name = if(customName) then Name else nameAsset1 + "_" + nameAsset2
+  let key = validPoolK(kp(asset1, asset2))
+  if((i.caller == getAssetIssueAddress(fromBase58String(asset1))))
+   then if(key != false)
+    then {
+      let assetLpCreate = Issue(name, "LP asset for pool liquidity in Bicon DEX pair " + asset1 + "_"+ asset2, 1*D8,8,true)
+      let idAssetLp = calculateAssetId(assetLpCreate)
+      [
+       StringEntry(l+kp(asset1, asset2), toBase58String(idAssetLp)),
+       assetLpCreate
+      ]
+    }
+    else throw("Invalid Pool Key. Try inverting the assets")
+  else throw("Only the issuer address of asset1 itself can invoke this function.")
+}
+
+@Callable(i)
+func RemoveLiquidity(Asset1: String, Asset2: String, Amount: Int) = {
+  let currentKey = toBase58String(i.caller.bytes) #get address for user
+  #main validations
+  let power = getBooleanValue(Admin, ac) #checks if the smart contract is activate
+  let poolActivate = getBooleanValue(Admin, poolAc) #check if the pool in the smart contract is activate
+  let acEvestx = getBooleanValue(Admin, aEVESTX) 
+  let poolKey = kp(Asset1, Asset2)
+  let key = validPoolK(poolKey) #get pool key (if existing) in smart contract for validation
+
+  let asset1 = if(Asset1 == eVESTX) then if(acEvestx) then EVESTX else throw("The smart contract does not currently support eVESTX.") else fromBase58String(Asset1)
+  let asset2 = if(Asset2 == eVESTX) then if(acEvestx) then EVESTX else throw("The smart contract does not currently support eVESTX.") else fromBase58String(Asset2)
+  let lpAssetId = getStringValue(this,l+kp(Asset1, Asset2)) #get LP assetId configured for pool in smart contract by admin
+  let currentAmount = kpAddress(currentKey,kp(Asset1, Asset2)) #get amount LP locked by address
+  let amountLpBlocked = lpBlocked(currentKey,poolKey)
+  let totalLP = totalAssetPool(lpAssetId,true)
+  let totalAsset1Pool =totalAssetPool(kp(Asset1, Asset2)+"_"+Asset1, false)
+  let totalAsset2Pool = totalAssetPool(kp(Asset1, Asset2)+"_"+Asset2,false)
+
+  #validation and more
+  if((power)) #if the smart contract is activate
+   then if(!(poolActivate)) #if pool is activate
+    then if(!(Asset1 == Asset2)) #if asset1 and asset2 they're not the equal and asset payment and asset string is equal
+      then if(key != false) #if pool key is valid 
+       then if(!(currentAmount == 0))
+        then if((currentAmount-amountLpBlocked) >= Amount)
+         then if(totalAsset1Pool > 2 || totalAsset2Pool > 2)
+          then{ 
+            let receiveAsset1 = toInt(fraction(toBigInt(i.payments[0].amount),toBigInt(D8),toBigInt(totalLP))*toBigInt(totalAsset1Pool)/toBigInt(D8)) -1
+            let receiveAsset2 = toInt(fraction(toBigInt(i.payments[0].amount),toBigInt(D8),toBigInt(totalLP))*toBigInt(totalAsset2Pool)/toBigInt(D8)) -1
+            let asset1pool = assetP(kp(Asset1, Asset2), Asset1) #get the total amount locked in smart contract for asset1
+            let asset2pool = assetP(kp(Asset1, Asset2), Asset2) #get the total amount locked in smart contract for asset2
+            let currentAmountAsset1 = poolAA(currentKey, kp(Asset1, Asset2), Asset1) #get amount locked by address for the asset1 if the lp token is not locked
+            let currentAmountAsset2 = poolAA(currentKey, kp(Asset1, Asset2), Asset2) #get amount locked by address for the asset2 if the lp token is not locked
+            let newcurrentAmountAsset1 = currentAmountAsset1 - receiveAsset1 #updates the total of values ​​blocked by the address in the pool for asset1
+            let newcurrentAmountAsset2 = currentAmountAsset2 - receiveAsset2 #updates the total of values ​​blocked by the address in the pool for asset2
+            let newcurrentAmount = currentAmount - Amount #updates the total of values ​​blocked by the address in the pool for lp asset
+            let newasset1pool = asset1pool - receiveAsset1 #updates the total of values ​​blocked in the pool for asset1
+            let newasset2pool = asset2pool - receiveAsset2 #updates the total of values ​​blocked in the pool for asset2
+            if(i.payments[0].assetId == fromBase58String(lpAssetId))
+             then if(Amount == i.payments[0].amount)
+              then
+            [
+             Burn(fromBase58String(lpAssetId), Amount),
+             ScriptTransfer(Address(i.caller.bytes),receiveAsset1,asset1),
+             ScriptTransfer(Address(i.caller.bytes),receiveAsset2,asset2),
+             IntegerEntry(pkey(Asset1, Asset2, currentKey), height), #updates the lock height of values ​​in the pool
+             IntegerEntry(currentKey + "_" + kp(Asset1, Asset2) + "_" + Asset1, newcurrentAmountAsset1), #update the amount loked by address for the asset1 in pool
+             IntegerEntry(currentKey + "_" + kp(Asset1, Asset2) + "_" + Asset2, newcurrentAmountAsset2), #update the amount loked by address for the asset2 in pool
+             IntegerEntry(kp(Asset1, Asset2) + "_" + currentKey,newcurrentAmount), #updates the total of values ​​blocked by the address in the pool for lp asset
+             IntegerEntry(kp(Asset1, Asset2)+"_"+Asset1, newasset1pool), #update the total amount of values blocked in pool for asset1
+             IntegerEntry(kp(Asset1, Asset2)+"_"+Asset2, newasset2pool), #update the total amount of values blocked in pool for asset2
+             IntegerEntry(Asset1, getAmountBlockAsset(Asset1) - receiveAsset1), #update the total amount of values blocked in smart contract for asset1
+             IntegerEntry(Asset2, getAmountBlockAsset(Asset2) - receiveAsset2), #update the total amount of values blocked in smart contract for asset2
+             IntegerEntry(lpAssetId, getAmountBlockAsset(lpAssetId) - Amount) #update the total amount of values blocked in pool for asset lp
+            ]
+             else throw("Withdrawal amount lower than asset lp amount. Your Lp amount available: " + toString(Amount))
+            else throw("Requires an lp asset as payment to remove locked amounts.")
+          }
+         else throw("Pool has no liquidity.")
+        else throw("Amount to be withdrawn greater than the amount available for withdrawal. Available: " + toString(Amount))
+       else throw("You have no locked values ​​in the pool")
+      else throw("Invalid Pool Key.")
+    else throw("Asset1 cannot be equal to Asset2")
+   else throw("liquidity is currently under maintenance.")
+  else throw("dApp is currently under maintenance.")
+}
+
+@Callable(i)
+func Stake(pool: Boolean, Asset1: String, Asset2: String) = {
+  #main validations
+  let power = getBooleanValue(Admin, ac)
+  let liquidityPower = getBooleanValue(Admin, liquidityAc)
+  let lpAssetId = if(pool) then getStringValue(Admin,l+kp(Asset1, Asset2)) else MainAsset() #get LP assetId configured for pool in smart contract by admin
+  let lpAId = match lpAssetId {
+    case xi:String => fromBase58String(xi)
+    case x:ByteVector => x
+  }
+
+  #validation and more
+  if((power))
+   then if(!(liquidityPower))
+    then if((i.payments[0].assetId != lpAId))
+     then throw("Invalid asset! Kindly Deposit Only " + toBase58String(MainAsset()) + " or valid asset lp")
+     else{
+      if(!(pool))
+       then {
+         let currentKey = toBase58String(i.caller.bytes)
+         let currentAmount = match getInteger(this, currentKey) { 
+          case a: Int => a 
+          case _ => 0 
+         }
+         let h = if(currentAmount == 0) then height else valueOrElse(getIntegerValue(this,(deposit_height+ currentKey)), height)
+         let newAmount = (currentAmount + i.payments[0].amount)
+         let useramount = IntegerEntry(currentKey, newAmount)
+         let userdepositheight = IntegerEntry((deposit_height+ currentKey), h)
+         let previouslockbalance = match getInteger(this, "Total_Tokens_Locked:"){
+          case a: Int => a
+          case _ => 0 
+         }
+         let totaltoken = (previouslockbalance + i.payments[0].amount)
+         let TLV = IntegerEntry("Total_Tokens_Locked:", totaltoken)
+         [useramount, userdepositheight, TLV]
+       }
+       else{
+         let poolKey = kp(Asset1, Asset2)
+         let key = validPoolK(poolKey)
+         if(key != false)
+          then{
+            let currentKey = toBase58String(i.caller.bytes)
+            let currentAmount = match getInteger(this, "STAKE_LP_" +currentKey + "_"+poolKey) {
+              case a: Int => a
+              case _ => 0
+            }
+            let h = if(currentAmount == 0) then height else valueOrElse(getIntegerValue(this,(deposit_height+ "_"+ currentKey + "_"+poolKey)), height)
+            let newAmount = (currentAmount + i.payments[0].amount)
+            let useramount = IntegerEntry("STAKE_LP_" +currentKey + "_"+poolKey, newAmount)
+            let userdepositheight = IntegerEntry((deposit_height+ "_"+ currentKey + "_"+poolKey), height)
+            let previouslockbalance = match getInteger(this, "Total_Tokens_LP_Locked_" + poolKey){ 
+              case a:Int => a
+              case _ => 0
+            }
+            let totaltoken = (previouslockbalance + i.payments[0].amount)
+            let TLV = IntegerEntry("Total_Tokens_LP_Locked_" + poolKey, totaltoken)
+            [useramount, userdepositheight, TLV]
+          }
+          else throw("Invalid Pool key.")
+       }
+    }
+   else throw("liquidity is currently under maintenance.")
+  else throw("dApp is currently under maintenance.")
+}
+
+@Callable(i)
+func Unstake(pool: Boolean, Asset1: String, Asset2: String,amount: Int) = {
+  #main validations
+  let power = getBooleanValue(Admin, ac)
+  let liquidityPower = getBooleanValue(Admin, liquidityAc)
+
+  let poolKey = kp(Asset1, Asset2)
+
+  #payment 
+  let pmt =i.payments[0]
+
+  #validation and more
+  if((power))
+   then if(!(liquidityPower)) 
+    then{
+    let currentKey = toBase58String(i.caller.bytes)
+    let currentAmount = match (if(pool) then getIntegerValue(this,"STAKE_LP_" +currentKey + "_"+kp(Asset1, Asset2)) else getIntegerValue(this, currentKey)){
+      case a: Int => a
+      case _ => 0
+    }
+    let swapheightkeyname = if(pool) then (deposit_height+ "_"+ currentKey + "_"+kp(Asset1, Asset2)) else(deposit_height + currentKey)
+    let previouslockbalance = if(pool) then getIntegerValue(this, "Total_Tokens_LP_Locked_" +kp(Asset1, Asset2)) else getIntegerValue(this, "Total_Tokens_Locked:")
+    let totaltoken = (previouslockbalance - amount)
+    let diff = (height - getIntegerValue(this, swapheightkeyname))
+    let bcd = getIntegerValue(this, bcD)
+    let reward = (diff * bcd) * D8
+    let ood = match getInteger(poolKey+"_rate_fee_swap") {
+      case iw:Int => iw
+      case _ => 0
+    }
+    let oldT = match getInteger(poolKey+"_rate_fee_swap") {
+      case idd:Int => idd / (previouslockbalance/amount)
+      case _ => 0
+    }
+    let feeCalc = if(Asset1 == getStringValue(this,main)) then reward / (previouslockbalance/amount) else oldT
+    if ((0 > amount))
+      then throw(if(pool) then "Can't withdraw negative "+ Asset1 + "/" + Asset2 +  " amount" else "Can't withdraw negative AxAi amount")
+      else {
+       let newAmount = (currentAmount - amount)
+       if ((0 > newAmount))
+        then throw(if(pool) then "Not enough Asset Lp " + Asset1 + "/" + Asset2 +  " balance" else "Not enough AxAi balance")
+          else[
+            IntegerEntry(if(pool) then "STAKE_LP_" +currentKey + "_"+kp(Asset1, Asset2) else currentKey, newAmount), 
+            IntegerEntry(if(pool) then "Total_Tokens_LP_Locked_" +kp(Asset1, Asset2) else "Total_Tokens_Locked:", totaltoken),
+            ScriptTransfer(i.caller, amount, if(pool) then fromBase58String(getStringValue(this,l+kp(Asset1, Asset2))) else MainAsset()), 
+            ScriptTransfer(i.caller,feeCalc, MainAsset()),
+            IntegerEntry(poolKey+"_rate_fee_swap",ood-oldT)
+          ]
+      }
+    }
+   else throw("liquidity is currently under maintenance.")
+  else throw("dApp is currently under maintenance.")
+}
+
+@Callable(i)
+func CreateNFT(name: String,ipfs:String) = {
+  let shah = sha256(fromBase58String(ipfs))
+  [
+   Issue(name,"{'ipfs':'"+ipfs+"','SHA-HASH':'"+toBase58String(shah)+"'}",1,0,false)
+  ]
+}
+
+# @Callable(i)
+# func GuaranteSwap() = {
+
+# }
+
+@Callable(i)
+func BuyNFT(NFTId: String) = {
+  let power = getBooleanValue(Admin, ac)
+  let nftm = getBooleanValue(Admin, nfetAc)
+  let pmt =i.payments[0]
+  let price = match getIntegerValue(this,NFTId+ "_tosale") {
+    case is:Int => is
+    case _ => 0
+  }
+  let asset = match getStringValue(this, NFTId + "_assetsale"){
+    case s:String => if(s=="EVESTX" || s == "eVESTX") then EVESTX else fromBase58String(s)
+    case _ => throw("NFT not listed for sale")
+  }
+
+  let oldAddress = match getStringValue(this, NFTId + "_address"){
+    case s: String => s
+    case _ => throw("NFT not listed for sale")
+  }
+  if(power)
+   then if(!nftm)
+    then if(price != 0)
+     then if(price == pmt.amount)
+      then if(pmt.assetId == asset)
+       then{
+          [
+          IntegerEntry(NFTId + "_tosale",0),
+          BooleanEntry(NFTId + "_saled", true),
+          StringEntry(NFTId + "_address_SAle", ""), 
+          StringEntry(NFTId + "_assetsale",NFTId),
+          StringEntry(NFTId + "_address", toBase58String(i.caller.bytes)),
+          ScriptTransfer(i.caller, 1,fromBase58String(NFTId)),
+          ScriptTransfer(Address(fromBase58String(oldAddress)), pmt.amount, asset)
+          ]
+       }
+      else throw("Asset not equal to the asset defined as a payment method by the NFT issuer")
+     else throw("Value not equal to sale value")
+    else throw("This NFT is not for sale.")
+   else throw("NFT is currently under maintenance.")
+  else throw("dApp is currently under maintenance.")
+}
+
+@Callable(i)
+func RemoveToSell(NFTId: String) = {
+  let power = getBooleanValue(Admin, ac)
+  let nftm = getBooleanValue(Admin, nfetAc)
+  let pmt =i.payments[0]
+  if(power)
+   then if(!nftm)
+    then if(getAssetIssueAddress(fromBase58String(NFTId)) == i.caller)
+     then
+     [
+        DeleteEntry(NFTId + "_tosale"),
+        DeleteEntry(NFTId + "_saled"),
+        DeleteEntry(NFTId + "_address_SAle"), 
+        DeleteEntry(NFTId + "_assetsale"),
+        DeleteEntry(NFTId + "_address")
+     ]
+    else throw("Only the owner of the NFT can remove it from the list.")
+   else throw("NFT is currently under maintenance.")
+  else throw("dApp is currently under maintenance.")
+}
+
+@Callable(i)
+func SellNFT(Price: Int, asset:String) = {
+  let power = getBooleanValue(Admin, ac)
+  let nftm = getBooleanValue(Admin, nfetAc)
+  let pmt =i.payments[0]
+  if(power)
+   then if(!nftm)
+    then if(pmt.amount == 0 || pmt.assetId == EVESTX)
+     then throw("Requires NFT as transfer payment for sale.")
+     else[IntegerEntry(getAsset(pmt.assetId) + "_tosale",Price),BooleanEntry(getAsset(pmt.assetId) + "_saled", false),StringEntry(getAsset(pmt.assetId) + "_address_SAle", ""), StringEntry(getAsset(pmt.assetId) + "_assetsale",asset), StringEntry(getAsset(pmt.assetId) + "_address", toBase58String(i.caller.bytes))]
+   else throw("NFT is currently under maintenance.")
+  else throw("dApp is currently under maintenance.")
+}
+
+@Callable(i)
+func CreateCollection(collectionName: String) = {
+  let currentKey = toBase58String(i.caller.bytes) #get address for user
+  let tc = match getIntegerValue(this, currentKey+"_total_collection") {
+    case ai:Int => ai
+    case _ => 0
+  }
+  if(verifiCollectionExist(collectionName))
+   then throw("Error: A collection with that name already exists, try another one.")
+  else [StringEntry(collectionName, currentKey), IntegerEntry(currentKey+"_total_collection", tc+1)]
+}
+
+# @Callable(i)
+# func AddSwapNFT() = {
+#   let power = getBooleanValue(Admin, ac)
+#   let nftm = getBooleanValue(Admin, nfetAc)
+#   let pmt =i.payments[0]
+#   if(power)
+#    then if(!nftm)
+
+#    else throw("NFT is currently under maintenance.")
+#   else throw("dApp is currently under maintenance.")
+# }
+
+# @Callable(i)
+# func AcceptSwapNFT() = {
+#   let power = getBooleanValue(Admin, ac)
+#   let nftm = getBooleanValue(Admin, nfetAc)
+#   let pmt =i.payments[0]
+#   if(power)
+#    then if(!nftm)
+
+#    else throw("NFT is currently under maintenance.")
+#   else throw("dApp is currently under maintenance.")
+# }
+
+# @Callable(i)
+# func RemoveSwapNFT() = {
+#   let power = getBooleanValue(Admin, ac)
+#   let nftm = getBooleanValue(Admin, nfetAc)
+#   let pmt =i.payments[0]
+#   if(power)
+#    then if(!nftm)
+
+#    else throw("NFT is currently under maintenance.")
+#   else throw("dApp is currently under maintenance.")
+# }
+
+@Verifier(tx)
+func verify() = sigVerify(tx.bodyBytes, tx.proofs[0], tx.senderPublicKey)
