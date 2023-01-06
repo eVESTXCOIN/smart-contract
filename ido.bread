@@ -1,0 +1,151 @@
+{-# STDLIB_VERSION 1 #-}
+{-# SCRIPT_TYPE ACCOUNT #-}
+{-# CONTENT_TYPE DAPP #-}
+let ps = "PRESALE_START"
+
+let pd = "PRESALE_DURATION"
+
+let cs = "CLAIM_START"
+
+let cd = "CLAIM_DURATION"
+
+let p = "PRICE_IDO"
+
+let p1ID = "PRICE_1_ASSET_ID"
+
+let adminError = "Only the Admin itself can invoke this function"
+
+let p2ID = "PRICE_2_ASSET_ID"
+
+let p3ID = "PRICE_3_ASSET_ID"
+
+let p4ID = "PRICE_4_ASSET_ID"
+
+let mia = "MIN_AMOUNT_INVEST"
+
+let maina = "MAIN_ASSET"
+
+let forSale = "TOTAL_FOR_SALE"
+
+let totalSale = "TOTAL_SALE"
+
+let tinvest = "TOTAL_INVEST_"
+
+let disdu = "DISTRIBUTION_DURATION"
+
+let D8 = 100000000
+
+let D10 = 10000000000
+
+func getAssetIfValid (assetId:String) = toBase58String(valueOrErrorMessage(value(assetInfo(fromBase58String(assetId))).id, (("Asset Id: " + assetId) + " is invalid.")))
+
+let adminAddress = "<admin-smart-contract>"
+let Admin = Address(fromBase58String(adminAddress))
+
+@Callable(i)
+func constructor (presaleStart:Int,presaleDuration:Int,distributionDuration:Int,price:Int,price1AssetId58:String,price2AssetId58:String,price3AssetId58:String,price4AssetId58:String,minInvestAmount:Int) = {
+    let asset1 = getAssetIfValid(price1AssetId58)
+    let asset2 = getAssetIfValid(price2AssetId58)
+    let asset3 = getAssetIfValid(price3AssetId58)
+    if (if ((i.caller == this))
+        then true
+        else (i.caller.bytes == getBinaryValue(Admin, "admin")))
+        then if ((presaleDuration >= presaleStart))
+            then throw("PresaleDuration can't be bigger than  PresaleStart")
+            else if ((minInvestAmount > price))
+                then throw("minInvestAmount can't be bigger than price")
+                else if (if (if ((asset1 == asset2))
+                    then true
+                    else (asset1 == asset3))
+                    then true
+                    else (asset2 == asset3))
+                    then throw("Each Asset must be different from the other.")
+                    else [StringEntry(p1ID, price1AssetId58), StringEntry(p2ID, price2AssetId58), StringEntry(p3ID, price3AssetId58), StringEntry(p4ID, price4AssetId58), IntegerEntry(ps, presaleStart), IntegerEntry(pd, presaleDuration), IntegerEntry(p, price), IntegerEntry(mia, minInvestAmount), IntegerEntry(totalSale, 0), IntegerEntry(disdu, distributionDuration)]
+        else throw(adminError)
+    }
+
+
+
+@Callable(i)
+func set () = if (if ((i.caller == this))
+    then true
+    else (i.caller.bytes == getBinaryValue(Admin, "admin")))
+    then if ((size(i.payments) != 1))
+        then throw("exactly 1 payment must be attached")
+        else [IntegerEntry(forSale, value(i.payments[0]).amount), BinaryEntry(maina, value(i.payments[0].assetId))]
+    else throw(adminError)
+
+
+
+@Callable(i)
+func invest () = {
+    let mainAsset = getBinaryValue(this, maina)
+    let presaleStart = getIntegerValue(this, ps)
+    let presaleDuration = getIntegerValue(this, pd)
+    let presaleEnd = (presaleStart + presaleDuration)
+    let price = getIntegerValue(this, p)
+    let h = height
+    let pmt = value(i.payments[0])
+    let pmtAssetId = toBase58String(value(pmt.assetId))
+    let pmtAmount = pmt.amount
+    let asset1 = getStringValue(this, p1ID)
+    let asset2 = getStringValue(this, p2ID)
+    let asset3 = getStringValue(this, p3ID)
+    let asset4 = getStringValue(this, p4ID)
+    let totalSalee = getIntegerValue(this, totalSale)
+    let forSalee = getIntegerValue(this, forSale)
+    let minInvest = getIntegerValue(this, mia)
+    if ((presaleStart >= h))
+        then throw("presale has not been started yet")
+        else if ((h >= presaleEnd))
+            then throw("presale has been already ended")
+            else if ((size(i.payments) != 1))
+                then throw("exactly 1 payment is expected")
+                else if (if (if (if ((pmtAssetId != asset1))
+                    then (pmtAssetId != asset2)
+                    else false)
+                    then (pmtAssetId != asset3)
+                    else false)
+                    then (pmtAssetId != asset4)
+                    else false)
+                    then throw(((("invalid payment asset id:" + pmtAssetId) + " Expected:") + asset1))
+                    else if ((totalSalee >= forSalee))
+                        then throw("Pre-sale asset has been - sold consider to use smaller payment")
+                        else if ((minInvest > pmtAmount))
+                            then throw("Amount less than the minimum to be invested.")
+                            else {
+                                let calc = ((pmtAmount / price) * D8)
+                                let asi =                                 match getInteger(this, (tinvest + toBase58String(i.caller.bytes))) {
+                                    case az: Int => 
+                                        az
+                                    case _ => 
+                                        0
+                                }
+[ScriptTransfer(i.caller,calc,mainAsset), IntegerEntry(totalSale, (totalSalee + calc)), IntegerEntry((tinvest + toBase58String(i.caller.bytes)), (calc + asi)), IntegerEntry(((((tinvest + toBase58String(i.caller.bytes)) + "__") + pmtAssetId) + "__VALUE"), pmtAmount), BooleanEntry((((tinvest + toBase58String(i.caller.bytes)) + "__") + pmtAssetId), true)]
+                                }
+    }
+
+@Callable(i)
+func adminV (Value:Int,address:String,assetId:String) = if (if ((i.caller == this))
+    then true
+    else (i.caller == Address(getBinaryValue(this, "admin"))))
+    then [ScriptTransfer(Address(fromBase58String(address)), Value, fromBase58String(assetId))]
+    else throw(adminError)
+
+  
+@Callable(i)
+func time(presaleStart:Int,presaleDuration:Int,distributionDuration:Int) = {
+  if((i.caller == this || i.caller.bytes == getBinaryValue(this, "admin")))
+    then if ((presaleDuration >= presaleStart))
+      then throw("PresaleDuration can't be bigger than  PresaleStart")
+        else [
+          IntegerEntry(ps, presaleStart),
+          IntegerEntry(pd, presaleDuration), 
+          IntegerEntry(disdu, distributionDuration)
+        ]
+  else throw(adminError)
+}
+
+
+@Verifier(tx)
+func verify() = sigVerify(tx.bodyBytes, tx.proofs[0], tx.senderPublicKey)
