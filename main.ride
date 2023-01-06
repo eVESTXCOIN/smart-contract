@@ -1,8 +1,8 @@
-{-# STDLIB_VERSION 6 #-}
+{-# STDLIB_VERSION 1 #-}
 {-# CONTENT_TYPE DAPP #-}
 {-# SCRIPT_TYPE ACCOUNT #-}
 
-let adminAddress = "3N8UaqrCTjypGPWXSvFJVSLv23bfuiPoJAh"
+let adminAddress = "<address-smart-contract-admin>"
 let Admin = Address(fromBase58String(adminAddress))
 
 #config Key
